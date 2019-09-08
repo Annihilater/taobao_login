@@ -1,86 +1,19 @@
-#!/usr/bin/env python  
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-@author: zhangslob
-@file: taobao_login.py 
-@time: 2019/02/14
-@desc: 
-"""
-
+# @Date  : 2019-09-08 17:19
+# @Author: PythonVampire
+# @email : vampire@ivamp.cn
+# @File  : taobao_login.py
 import asyncio
-import random
-import time
-from pyppeteer import launch
-from retrying import retry
+import time, random
+from pyppeteer.launcher import launch  # 控制模拟浏览器用
+from retrying import retry  # 设置重试次数用的
+
+from secure import account, pwd
 
 
-async def taobao_login(username, password, url):
-    """
-    淘宝登录主程序
-    :param username: 用户名
-    :param password: 密码
-    :param url: 登录网址
-    :return: 登录cookies
-    """
-    # 'headless': False如果想要浏览器隐藏更改False为True
-    browser = await launch({'headless': False, 'args': ['--no-sandbox']})
-    page = await browser.newPage()
-    await page.setUserAgent(
-        'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36')
-    await page.goto(url)
-
-    # 以下为插入中间js，将淘宝会为了检测浏览器而调用的js修改其结果
-    await page.evaluate(
-        '''() =>{ Object.defineProperties(navigator,{ webdriver:{ get: () => false } }) }''')
-    await page.evaluate('''() =>{ window.navigator.chrome = { runtime: {},  }; }''')
-    await page.evaluate('''() =>{ Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] }); }''')
-    await page.evaluate('''() =>{ Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5,6], }); }''')
-
-    await page.click('#J_QRCodeLogin > div.login-links > a.forget-pwd.J_Quick2Static')
-    page.mouse
-    time.sleep(1)
-    # 输入用户名，密码
-    await page.type('#TPL_username_1', username, {'delay': input_time_random() - 50})   # delay是限制输入的时间
-    await page.type('#TPL_password_1', password, {'delay': input_time_random()})
-    time.sleep(2)
-    # 检测页面是否有滑块。原理是检测页面元素。
-    slider = await page.Jeval('#nocaptcha', 'node => node.style')  # 是否有滑块
-
-    if slider:
-        print('当前页面出现滑块')
-        # await page.screenshot({'path': './headless-login-slide.png'}) # 截图测试
-        flag, page = await mouse_slide(page=page)  # js拉动滑块过去。
-        if flag:
-            await page.keyboard.press('Enter')  # 确保内容输入完毕，少数页面会自动完成按钮点击
-            print("print enter", flag)
-            await page.evaluate('''document.getElementById("J_SubmitStatic").click()''')  # 如果无法通过回车键完成点击，就调用js模拟点击登录按钮。
-            time.sleep(2)
-            cookies_list = await page.cookies()
-            print(cookies_list)
-            return await get_cookie(page)  # 导出cookie 完成登陆后就可以拿着cookie玩各种各样的事情了。
-    else:
-        print("")
-        await page.keyboard.press('Enter')
-        print("print enter")
-        await page.evaluate('''document.getElementById("J_SubmitStatic").click()''')
-        await page.waitFor(20)
-        await page.waitForNavigation()
-
-        try:
-            global error  # 检测是否是账号密码错误
-            print("error_1:", error)
-            error = await page.Jeval('.error', 'node => node.textContent')
-            print("error_2:", error)
-        except Exception as e:
-            error = None
-        finally:
-            if error:
-                print('确保账户安全重新入输入')
-                # 程序退出。
-                loop.close()
-            else:
-                print(page.url)
-                return await get_cookie(page)
+def input_time_random():
+    return random.randint(100, 151)
 
 
 # 获取登录后cookie
@@ -89,10 +22,9 @@ async def get_cookie(page):
     cookies_list = await page.cookies()
     cookies = ''
     for cookie in cookies_list:
-        str_cookie = '{0}={1};'
-        str_cookie = str_cookie.format(cookie.get('name'), cookie.get('value'))
+        str_cookie = '{0}={1};'.format(cookie.get('name'), cookie.get('value'))
         cookies += str_cookie
-    # print(cookies)
+    print(cookies)
     return cookies
 
 
@@ -100,7 +32,7 @@ def retry_if_result_none(result):
     return result is None
 
 
-@retry(retry_on_result=retry_if_result_none)
+@retry(retry_on_result=retry_if_result_none, )
 async def mouse_slide(page=None):
     await asyncio.sleep(2)
     try:
@@ -124,16 +56,83 @@ async def mouse_slide(page=None):
             return 1, page
 
 
-def input_time_random():
-    return random.randint(100, 151)
+async def main(username, pwd, url):  # 定义main协程函数，
+    width, height = 1500, 800
+    # 以下使用await 可以针对耗时的操作进行挂起
+    # 启动 pyppeteer 属于内存中实现交互的模拟器
+    # 'headless': False如果想要浏览器隐藏更改False为True
+    browser = await launch({'headless': False, 'args': ['--no-sandbox', f'--window-size={width},{height}'], })
+    page = await browser.newPage()  # 启动个新的浏览器页面
+    await page.setViewport({'width': width, 'height': height})
+    await page.setUserAgent(
+        'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.106 Safari/537.36')
+
+    await page.goto(url)  # 访问登录页面
+
+    # 替换淘宝在检测浏览时采集的一些参数。
+    # 就是在浏览器运行的时候，始终让window.navigator.webdriver=false
+    # navigator是 window 对象的一个属性，同时修改plugins，languages，navigator
+    # 以下为插入中间js，将淘宝会为了检测浏览器而调用的js修改其结果。
+    await page.evaluate(
+        '''() =>{ Object.defineProperties(navigator,{ webdriver:{ get: () => false } }) }''')
+    await page.evaluate('''() =>{ window.navigator.chrome = { runtime: {},  }; }''')
+    await page.evaluate('''() =>{ Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] }); }''')
+    await page.evaluate('''() =>{ Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5,6], }); }''')
+
+    # 使用type选定页面元素，并修改其数值，用于输入账号密码，修改的速度仿人类操作，因为有个输入速度的检测机制
+    # 因为 pyppeteer 框架需要转换为js操作，而js和python的类型定义不同，所以写法与参数要用字典类型导入
+    await page.type('.J_UserName', username, {'delay': input_time_random() - 50})
+    await page.type('#J_StandardPwd input', pwd, {'delay': input_time_random()})
+
+    # await page.screenshot({'path': './headless-test-result.png'})    # 截图测试
+    time.sleep(2)
+
+    # 检测页面是否有滑块。原理是检测页面元素。
+    slider = await page.Jeval('#nocaptcha', 'node => node.style')  # 是否有滑块
+
+    if slider:
+        print('当前页面出现滑块')
+        # await page.screenshot({'path': './headless-login-slide.png'}) # 截图测试
+        flag, page = await mouse_slide(page=page)  # js拉动滑块过去。
+        if flag:
+            await page.keyboard.press('Enter')  # 确保内容输入完毕，少数页面会自动完成按钮点击
+            print("print enter", flag)
+
+            # 如果无法通过回车键完成点击，就调用js模拟点击登录按钮。
+            await page.evaluate('''document.getElementById("J_SubmitStatic").click()''')
+
+            time.sleep(2)
+            # cookies_list = await page.cookies()
+            # print(cookies_list)
+            await get_cookie(page)  # 导出cookie 完成登陆后就可以拿着cookie玩各种各样的事情了。
+    else:
+        print("")
+        await page.keyboard.press('Enter')
+        print("print enter")
+        await page.evaluate('''document.getElementById("J_SubmitStatic").click()''')
+        await page.waitFor(20)
+        await page.waitForNavigation()
+
+        try:
+            global error  # 检测是否是账号密码错误
+            print("error_1:", error)
+            error = await page.Jeval('.error', 'node => node.textContent')
+            print("error_2:", error)
+        except Exception as e:
+            error = None
+        finally:
+            if error:
+                print('确保账户安全重新入输入')
+                loop.close()  # 程序退出
+            else:
+                print(page.url)
+                await get_cookie(page)
+    # time.sleep(100)
 
 
 if __name__ == '__main__':
-    username = ''
-    password = ''
-    url = 'https://login.taobao.com/member/login.jhtml?redirectURL=https%3A%2F%2Fwww.taobao.com%2F'
-    loop = asyncio.get_event_loop()
-    task = asyncio.ensure_future(taobao_login(username, password, url))
-    loop.run_until_complete(task)
-    cookie = task.result()
-    print(cookie)
+    username = account  # 淘宝用户名
+    pass_world = pwd  # 密码
+    url = 'https://login.taobao.com/member/login.jhtml?spm=a21bo.2017.754894437.1.5af911d9n3dViV&f=top&redirectURL=https%3A%2F%2Fwww.taobao.com%2F'
+    loop = asyncio.get_event_loop()  # 协程，开启个无限循环的程序流程，把一些函数注册到事件循环上。当满足事件发生的时候，调用相应的协程函数。
+    loop.run_until_complete(main(username, pass_world, url))
